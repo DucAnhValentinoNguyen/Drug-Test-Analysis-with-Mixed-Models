@@ -1,0 +1,99 @@
+---
+title: "DrugTestAnalysisMixedModels"
+author: "Duc-Anh Nguyen"
+date: "2025-02-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+bloodpress is a fictional dataset
+```{r}
+library(ggplot2)
+#LadenderDatenundUberblickuberDatensatz:
+load("bloodpress.RData")
+head(bloodpress)
+dim(bloodpress)
+skimr::skim(bloodpress)
+colnames(bloodpress)
+
+table(bloodpress$Person)
+table(bloodpress$Dose)
+table(bloodpress$SBP)
+
+bloodpress |> ggplot(aes(Dose, SBP, col = as.factor(Person))) + geom_point() + geom_line() + facet_wrap(~Gender) + ggtitle("Blood pressures for different doses in 30 people") + ylab("Blood pressure in mmHg") + xlab("Dose in mg")+ scale_color_discrete(name = "30 people (test subjects)")
+
+
+```
+There is a trend for both *MOST* men and women: the higher the dose the lower the blood pressure (negative correlation)
+
+
+```{r}
+library(lme4)
+interaction_mixed_lm <- lmer(formula = SBP ~ Gender*Dose + (1|Person), data = bloodpress, REML = FALSE)
+summary(interaction_mixed_lm)
+std_dev <- as.data.frame(VarCorr(interaction_mixed_lm))
+(ICC = (std_dev$sdcor[1]^2)/sum(std_dev$sdcor^2))
+
+
+```
+So the percentage of variance explained by the random intercept, that is not explained by the fixed effects, is around 50%
+
+
+Now we want to check whether the interaction between gender and dose is necessary by a likelihood ratio test, with significant level of 0.05
+Formula: H~0~: $β_{interaction} = 0 $ vs. H1:$β_{interaction} \neq 0 $
+
+Remark: to carry this likelhood ratio test we will want to fit the both model with ML and not REML!
+```{r}
+mixed_lm <- lmer(formula = SBP~Gender + Dose + (1|Person), data = bloodpress, REML = FALSE)
+anova(interaction_mixed_lm, mixed_lm)
+```
+With that p value we could not reject the H0, so we have to stay with that that the interaction makes no significant difference! 
+
+Now we want to test if the random intercept makes sense. We will test the random intercept : 
+$\tau_0 = 0 $ vs. H1:$\tau_0 \geq 0 $
+```{r}
+lmodel <- lm(SBP~ Gender*Dose, data = bloodpress)
+# approximated test based on ML
+anova(interaction_mixed_lm, lmodel)
+
+
+# the exact test based on REML
+RLRsim::exactRLRT(m = update(interaction_mixed_lm, REML = TRUE))
+
+```
+Both of the test lead to a p value hinting that we could reject the H0, which tells us that we should keep the random intercept in the model.
+
+
+From the plots in the beginning we can see that each person reacts to the rise of dose differently, so it might make sense to also include a random slope for the doses
+```{r}
+full_model <- lmer(SBP~Gender*Dose + (1+Dose|Person), data = bloodpress, REML = FALSE)
+anova(full_model, interaction_mixed_lm)
+
+
+```
+The test shows that it makes sense to include the random slopes, as it does make a difference 
+
+
+Let us check also the model with random slope and no random intercept, with exact test and conditional AIC.
+Conditional AIC is suitable for when models are having the same fixed effects but different random effects
+```{r}
+# exact test
+randomslope_model <- lmer(
+  formula = SBP ~ Gender * Dose + (-1 + Dose | Person),
+  data = bloodpress,
+  REML = FALSE
+)
+RLRsim::exactRLRT(m = full_model, mA = randomslope_model, m0 = interaction_mixed_lm)
+
+# cAIC
+# install.packages("cAIC4")
+library(cAIC4)
+cAIC(lmodel)
+cAIC(interaction_mixed_lm)
+cAIC(randomslope_model)
+cAIC(full_model)
+```
